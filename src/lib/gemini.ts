@@ -1,16 +1,9 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const MODEL_FAST = process.env.GEMINI_MODEL_FAST ?? "gemini-2.0-flash";
-const MODEL_STRICT = process.env.GEMINI_MODEL_STRICT ?? "gemini-2.0-flash";
+const MODEL_EXTRACT =
+  process.env.GEMINI_MODEL_EXTRACT ?? "gemini-2.0-flash-lite";
+const MODEL_TRANSL = process.env.GEMINI_MODEL_TRANSL ?? "gemini-2.0-flash"; // mejor calidad en traducción
 
-const PROMPT = `
-Analiza esta página de manga (lectura derecha→izquierda).
-Devuelve SOLO JSON válido (array) con elementos:
-{ "order": number, "bbox": { "x":0..1, "y":0..1, "w":0..1, "h":0..1 }, "original": string, "translated": string, "confidence": 0..1 }.
-Sin texto extra ni explicaciones. Traduce al español neutro.
-`;
-
-// Lanza si falta la API key
 function ensureKey(): string {
   const key = process.env.GEMINI_API_KEY;
   if (!key)
@@ -18,72 +11,89 @@ function ensureKey(): string {
   return key;
 }
 
-// Modelo con configuración para forzar JSON
-function getModel(modelName: string) {
+function getModel(modelName: string, schema: any) {
   const genAI = new GoogleGenerativeAI(ensureKey());
   return genAI.getGenerativeModel({
     model: modelName,
     generationConfig: {
       responseMimeType: "application/json",
-      // Opcional: schema para que cierre bien el formato
-      responseSchema: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            order: { type: "integer" },
-            bbox: {
-              type: "object",
-              properties: {
-                x: { type: "number" },
-                y: { type: "number" },
-                w: { type: "number" },
-                h: { type: "number" },
-              },
-              required: ["x", "y", "w", "h"],
-            },
-            original: { type: "string" },
-            translated: { type: "string" },
-            confidence: { type: "number" },
-          },
-          required: ["order", "bbox", "original", "translated", "confidence"],
-        },
-      },
+      responseSchema: schema,
     },
   });
 }
 
-async function callModel(modelName: string, imgWebp: Buffer): Promise<string> {
-  const model = getModel(modelName);
-  try {
-    const res = await model.generateContent([
-      { text: PROMPT },
-      {
-        inlineData: {
-          data: imgWebp.toString("base64"),
-          mimeType: "image/webp",
+// A) Extrae solo segmentos (sin traducir)
+export async function extractSegmentsFromImage(
+  imgWebp: Buffer
+): Promise<string> {
+  const schema = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        order: { type: "integer" },
+        bbox: {
+          type: "object",
+          properties: {
+            x: { type: "number" },
+            y: { type: "number" },
+            w: { type: "number" },
+            h: { type: "number" },
+          },
+          required: ["x", "y", "w", "h"],
         },
+        original: { type: "string" },
+        confidence: { type: "number" },
       },
-    ]);
-    return res.response.text(); // debería venir ya como JSON puro
-  } catch (e: any) {
-    const msg = e?.message || String(e);
-    const status = e?.status || e?.response?.status;
-    throw new Error(
-      `Gemini(${modelName}) fallo [${status ?? "no-status"}]: ${msg}`
-    );
-  }
+      required: ["order", "bbox", "original"],
+    },
+  };
+
+  const prompt = `
+Analiza esta página de manga. Devuelve SOLO JSON.
+- Detecta globos y recuadros de texto.
+- Ordena para lectura manga (derecha→izquierda y arriba→abajo).
+- Para cada ítem: { "order", "bbox": {"x","y","w","h"} (0..1), "original": "texto", "confidence": 0..1 }.
+- No traduzcas. No agregues explicaciones. Solo JSON.
+`;
+
+  const model = getModel(MODEL_EXTRACT, schema);
+  const res = await model.generateContent([
+    { text: prompt },
+    {
+      inlineData: { data: imgWebp.toString("base64"), mimeType: "image/webp" },
+    },
+  ]);
+  return res.response.text();
 }
 
-export async function translateImageWebpToSegments(imgWebp: Buffer) {
-  try {
-    return await callModel(MODEL_FAST, imgWebp);
-  } catch (e: any) {
-    const m = (e?.message ?? "").toLowerCase();
-    // si hay bloqueo de safety, intentamos con el modelo más estricto
-    if (m.includes("safety") || m.includes("blocked")) {
-      return await callModel(MODEL_STRICT, imgWebp);
-    }
-    throw e;
-  }
+// B) Traduce lista ordenada con coherencia de página
+export async function translateSegmentsWithContext(
+  items: Array<{ order: number; original: string }>
+): Promise<string> {
+  const schema = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        order: { type: "integer" },
+        translated: { type: "string" },
+      },
+      required: ["order", "translated"],
+    },
+  };
+
+  const prompt = `
+Traduce del ingles al español neutro teniendo en cuenta TODO el contexto de la página.
+Reglas:
+- Mantén coherencia entre líneas (pronombres, tiempos, chistes).
+- Conserva nombres propios y honoríficos si agregan matiz (san, chan, senpai), en minúscula.
+- Evita traducciones literales raras; prioriza naturalidad breve.
+- NO cambies el orden. Devuelve SOLO JSON: [{ "order": n, "translated": "..." }].
+Aquí está la lista (orden manga):
+${items.map((it) => `#${it.order}: ${it.original}`).join("\n")}
+`;
+  const model = getModel(MODEL_TRANSL, schema);
+  const res = await model.generateContent([{ text: prompt }]);
+  return res.response.text();
 }
