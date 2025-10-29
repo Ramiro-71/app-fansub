@@ -1,0 +1,43 @@
+{
+  "name": "app-fansub",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.919.0",
+    "@google/generative-ai": "^0.24.1",
+    "@prisma/client": "^6.18.0",
+    "@tanstack/react-query": "^5.90.5",
+    "next": "16.0.1",
+    "pino": "^10.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-hotkeys-hook": "^5.2.1",
+    "react-zoom-pan-pinch": "^3.7.0",
+    "sharp": "^0.34.4",
+    "unrar-js": "^0.2.3",
+    "unzipper": "^0.12.3",
+    "zod": "^4.1.12",
+    "zustand": "^5.0.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/unzipper": "^0.10.11",
+    "autoprefixer": "^10.4.21",
+    "babel-plugin-react-compiler": "1.0.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.0.1",
+    "postcss": "^8.5.6",
+    "prisma": "^6.18.0",
+    "tailwindcss": "^4.1.16",
+    "typescript": "^5"
+  }
+}

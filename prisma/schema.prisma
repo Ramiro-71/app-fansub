@@ -1,0 +1,62 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+enum BookStatus {
+  PENDING
+  READY
+  ERROR
+}
+
+enum PageStatus {
+  PENDING
+  PROCESSING
+  READY
+  ERROR
+}
+
+model Book {
+  id         String     @id @default(cuid())
+  name       String
+  createdAt  DateTime   @default(now())
+  totalPages Int
+  status     BookStatus @default(PENDING)
+  pages      Page[]
+}
+
+model Page {
+  id        String        @id @default(cuid())
+  bookId    String
+  index     Int
+  imagePath String
+  width     Int
+  height    Int
+  status    PageStatus    @default(PENDING)
+  error     String?
+  segments  TextSegment[]
+  Book      Book          @relation(fields: [bookId], references: [id])
+
+  @@unique([bookId, index])
+}
+
+model TextSegment {
+  id         String @id @default(cuid())
+  pageId     String
+  order      Int
+  bboxX      Float
+  bboxY      Float
+  bboxW      Float
+  bboxH      Float
+  original   String
+  translated String
+  confidence Float
+  Page       Page   @relation(fields: [pageId], references: [id])
+
+  @@index([pageId, order])
+}

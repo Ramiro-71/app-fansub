@@ -1,0 +1,15 @@
+/* src/app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Opcional: estilos mínimos */
+html,
+body,
+#__next {
+  height: 100%;
+}
+body {
+  color: #111827; /* gray-900 */
+  background: #ffffff;
+}
