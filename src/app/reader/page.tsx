@@ -1,16 +1,8 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
-
-type UISegment = {
-  order: number;
-  bbox: { x: number; y: number; w: number; h: number };
-  original: string;
-  translated: string;
-  confidence: number;
-};
+import { orderSegments, type UISegment } from "@/lib/readingOrder";
 
 function useSegments(bookId: string, index: number) {
   return useQuery<UISegment[]>({
@@ -25,7 +17,6 @@ function useSegments(bookId: string, index: number) {
 }
 
 export default function ReaderPage() {
-  // Inicializamos desde la URL en el primer render (cliente)
   const [bookId] = useState<string>(() => {
     if (typeof window === "undefined") return "";
     return new URLSearchParams(window.location.search).get("bookId") || "";
@@ -36,6 +27,7 @@ export default function ReaderPage() {
     return Number(v ?? 0) || 0;
   });
   const [pages, setPages] = useState<number>(0);
+  const [dir, setDir] = useState<"rtl" | "ltr">("rtl"); // ← por defecto manga (RTL)
 
   useEffect(() => {
     if (!bookId) return;
@@ -49,6 +41,7 @@ export default function ReaderPage() {
     refetch,
     isFetching,
   } = useSegments(bookId, index);
+  const ordered = useMemo(() => orderSegments(segments, dir), [segments, dir]); // ← ordenar aquí
   const imgUrl = useMemo(
     () => (bookId ? `/api/image/${bookId}/${index}` : ""),
     [bookId, index]
@@ -91,21 +84,31 @@ export default function ReaderPage() {
           <button onClick={next} className="px-3 py-1 border rounded">
             →
           </button>
-          <button
-            onClick={translateNow}
-            className="ml-auto px-3 py-1 border rounded"
-          >
-            Traducir esta página
-          </button>
+
+          <div className="ml-auto flex items-center gap-2">
+            <label className="text-sm">Orden:</label>
+            <select
+              className="border rounded px-2 py-1"
+              value={dir}
+              onChange={(e) => setDir(e.target.value as "rtl" | "ltr")}
+              title="Orden de lectura (manga: RTL)"
+            >
+              <option value="rtl">Manga (derecha→izquierda)</option>
+              <option value="ltr">Occidental (izquierda→derecha)</option>
+            </select>
+            <button onClick={translateNow} className="px-3 py-1 border rounded">
+              Traducir esta página
+            </button>
+          </div>
         </div>
 
         {isFetching && <div className="text-sm opacity-70">Cargando…</div>}
 
-        {segments.length === 0 ? (
+        {ordered.length === 0 ? (
           <div className="opacity-60">Sin segmentos aún.</div>
         ) : (
           <ul className="space-y-2">
-            {segments.map((s) => (
+            {ordered.map((s) => (
               <li key={s.order} className="p-2 border rounded">
                 <div className="text-xs opacity-70">
                   #{s.order} conf:{Math.round(s.confidence * 100)}%
@@ -122,7 +125,7 @@ export default function ReaderPage() {
         )}
       </div>
 
-      {/* Derecha: imagen con next/image */}
+      {/* Derecha: imagen */}
       <div className="bg-black/5 flex items-center justify-center">
         <div className="relative h-[95vh] w-full">
           {imgUrl && (

@@ -7,6 +7,7 @@ import { translateImageWebpToSegments } from "@/lib/gemini";
 import { SegmentsResponse } from "@/lib/validation";
 import { sanitizeToJsonArray } from "@/lib/json";
 import type { Prisma } from "@prisma/client";
+import { orderSegments } from "@/lib/readingOrder";
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
@@ -38,12 +39,13 @@ export async function POST(req: NextRequest) {
     const text = await translateImageWebpToSegments(webp);
 
     const clean = sanitizeToJsonArray(text);
-    const segments = SegmentsResponse.parse(JSON.parse(clean));
+    const parsed = SegmentsResponse.parse(JSON.parse(clean));
+    const ordered = orderSegments(parsed, "rtl"); // ← fuerza manga
 
     await prisma.$transaction(async (tx) => {
       await tx.textSegment.deleteMany({ where: { pageId: page.id } });
       await tx.textSegment.createMany({
-        data: segments.map((s) => ({
+        data: ordered.map((s) => ({
           pageId: page.id,
           order: s.order,
           bboxX: s.bbox.x,
