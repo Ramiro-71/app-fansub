@@ -1,5 +1,12 @@
+// src/app/api/translate/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { NextRequest } from "next/server";
 import fs from "node:fs/promises";
 import type { Prisma } from "@prisma/client";
+
+import { prisma } from "@/lib/prisma";
 import { sanitizeToJsonArray } from "@/lib/json";
 import {
   ExtractedSegmentsResponse,
@@ -9,16 +16,18 @@ import {
   extractSegmentsFromImage,
   translateSegmentsWithContext,
 } from "@/lib/gemini";
-import { prisma } from "@/lib/prisma";
 import { orderSegments } from "@/lib/readingOrder";
+import { mergeBrokenPhrases } from "@/lib/mergeSegments";
 
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => null)) as {
     bookId?: string;
     index?: number;
   } | null;
+
   const bookId = body?.bookId;
   const index = body?.index;
+
   if (!bookId || typeof index !== "number") {
     return new Response(JSON.stringify({ error: "payload inválido" }), {
       status: 400,
@@ -26,10 +35,11 @@ export async function POST(req: NextRequest) {
   }
 
   const page = await prisma.page.findFirst({ where: { bookId, index } });
-  if (!page)
+  if (!page) {
     return new Response(JSON.stringify({ error: "page no encontrada" }), {
       status: 404,
     });
+  }
 
   await prisma.page.update({
     where: { id: page.id },
@@ -39,12 +49,12 @@ export async function POST(req: NextRequest) {
   try {
     const webp = await fs.readFile(page.imagePath);
 
-    // Paso A: extraer sólo originales
+    // A) EXTRACCIÓN (sin traducir) -> JSON puro
     const textA = await extractSegmentsFromImage(webp);
     const cleanA = sanitizeToJsonArray(textA);
     const extracted = ExtractedSegmentsResponse.parse(JSON.parse(cleanA));
 
-    // (opcional) reforzar orden manga con nuestra heurística por si el modelo se equivoca
+    // Reforzar orden manga (derecha→izquierda) por si el modelo se equivoca
     const extractedOrdered = orderSegments(
       extracted.map((e) => ({
         order: e.order,
@@ -56,8 +66,12 @@ export async function POST(req: NextRequest) {
       "rtl"
     );
 
-    // Paso B: traducir con el contexto de TODA la página
-    const listForLLM = extractedOrdered.map((s) => ({
+    // B) FUSIÓN de frases cortadas antes de traducir
+    //    Hoy traduces EN->ES; cuando uses japonés cambia a 'ja' o usa 'auto'
+    const merged = mergeBrokenPhrases(extractedOrdered, { lang: "en" });
+
+    // C) TRADUCCIÓN con contexto de toda la página
+    const listForLLM = merged.map((s) => ({
       order: s.order,
       original: s.original,
     }));
@@ -65,14 +79,14 @@ export async function POST(req: NextRequest) {
     const cleanB = sanitizeToJsonArray(textB);
     const tmap = TranslationMapResponse.parse(JSON.parse(cleanB));
 
-    // Fusionar
+    // Mapear traducciones por 'order'
     const byOrder = new Map(tmap.map((t) => [t.order, t.translated]));
-    const final = extractedOrdered.map((s) => ({
+    const final = merged.map((s) => ({
       ...s,
-      translated: byOrder.get(s.order) ?? s.original, // fallback por si faltara alguno
+      translated: byOrder.get(s.order) ?? s.original, // fallback defensivo
     }));
 
-    // Persistir
+    // Persistencia
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       await tx.textSegment.deleteMany({ where: { pageId: page.id } });
       await tx.textSegment.createMany({
