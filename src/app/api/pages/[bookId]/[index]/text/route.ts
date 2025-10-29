@@ -1,5 +1,7 @@
+// src/app/api/pages/[bookId]/[index]/text/route.ts
 export const runtime = "nodejs";
 
+import { NextRequest } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 type UISegment = {
@@ -10,23 +12,17 @@ type UISegment = {
   confidence: number;
 };
 
-type SegRow = {
-  order: number;
-  bboxX: number;
-  bboxY: number;
-  bboxW: number;
-  bboxH: number;
-  original: string;
-  translated: string;
-  confidence: number;
-};
-
 type Params = { bookId: string; index: string };
 
-export async function GET(_: Request, ctx: { params: Promise<Params> }) {
-  const { bookId, index } = await ctx.params; // ← params es Promise
-  const idx = Number(index);
-  if (!Number.isFinite(idx)) return new Response("Bad index", { status: 400 });
+export async function GET(
+  _req: NextRequest,
+  ctx: { params: Promise<Params> } // 👈 params es Promise
+) {
+  const { bookId, index } = await ctx.params; // 👈 await
+  const idx = Number.parseInt(index, 10);
+  if (!bookId || !Number.isFinite(idx)) {
+    return new Response("Bad params", { status: 400 });
+  }
 
   const page = await prisma.page.findFirst({
     where: { bookId, index: idx },
@@ -34,7 +30,7 @@ export async function GET(_: Request, ctx: { params: Promise<Params> }) {
   });
   if (!page) return new Response("Not found", { status: 404 });
 
-  const segs: SegRow[] = await prisma.textSegment.findMany({
+  const segs = await prisma.textSegment.findMany({
     where: { pageId: page.id },
     orderBy: { order: "asc" },
     select: {
@@ -49,15 +45,15 @@ export async function GET(_: Request, ctx: { params: Promise<Params> }) {
     },
   });
 
-  const payload: UISegment[] = segs.map(
-    (s): UISegment => ({
-      order: s.order,
-      bbox: { x: s.bboxX, y: s.bboxY, w: s.bboxW, h: s.bboxH },
-      original: s.original,
-      translated: s.translated,
-      confidence: s.confidence,
-    })
-  );
+  const payload: UISegment[] = segs.map((s) => ({
+    order: s.order,
+    bbox: { x: s.bboxX, y: s.bboxY, w: s.bboxW, h: s.bboxH },
+    original: s.original,
+    translated: s.translated,
+    confidence: s.confidence,
+  }));
 
-  return Response.json(payload);
+  return Response.json(payload, {
+    headers: { "Cache-Control": "no-store" },
+  });
 }

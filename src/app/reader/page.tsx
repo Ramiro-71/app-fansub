@@ -1,8 +1,13 @@
 "use client";
+
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Image from "next/image";
-import { orderSegments, type UISegment } from "@/lib/readingOrder";
+import { orderSegmentsLite, type UISegment } from "@/lib/readingOrder";
+
+type SourceLang = "en" | "ja" | "auto";
 
 function useSegments(bookId: string, index: number) {
   return useQuery<UISegment[]>({
@@ -13,22 +18,34 @@ function useSegments(bookId: string, index: number) {
       if (r.status === 404) return [];
       return (await r.json()) as UISegment[];
     },
+    refetchOnWindowFocus: false,
   });
 }
 
 export default function ReaderPage() {
-  const [bookId] = useState<string>(() => {
-    if (typeof window === "undefined") return "";
-    return new URLSearchParams(window.location.search).get("bookId") || "";
-  });
-  const [index, setIndex] = useState<number>(() => {
-    if (typeof window === "undefined") return 0;
-    const v = new URLSearchParams(window.location.search).get("i");
-    return Number(v ?? 0) || 0;
-  });
-  const [pages, setPages] = useState<number>(0);
-  const [dir, setDir] = useState<"rtl" | "ltr">("rtl"); // ← por defecto manga (RTL)
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
+  // Lee siempre desde search params (robusto con navegación por <Link/>)
+  const spBookId = searchParams.get("bookId") ?? "";
+  const spIndex = Number(searchParams.get("i") ?? "0");
+
+  const [bookId, setBookId] = useState<string>(spBookId);
+  const [index, setIndex] = useState<number>(
+    Number.isFinite(spIndex) ? spIndex : 0
+  );
+  const [pages, setPages] = useState<number>(0);
+  const [dir, setDir] = useState<"rtl" | "ltr">("rtl");
+  const [sourceLang, setSourceLang] = useState<SourceLang>("en");
+  const [translating, setTranslating] = useState(false);
+
+  // Mantén el estado sincronizado si la URL cambia (ej. navegación atrás/adelante)
+  useEffect(() => {
+    setBookId(spBookId);
+    setIndex(Number.isFinite(spIndex) ? spIndex : 0);
+  }, [spBookId, spIndex]);
+
+  // Carga metadatos
   useEffect(() => {
     if (!bookId) return;
     void fetch("/api/book?bookId=" + bookId)
@@ -36,24 +53,46 @@ export default function ReaderPage() {
       .then((j) => setPages(j.totalPages));
   }, [bookId]);
 
+  // Sincroniza el índice en la barra de direcciones cuando cambias de página
+  useEffect(() => {
+    if (!bookId) return;
+    const sp = new URLSearchParams(searchParams.toString());
+    sp.set("bookId", bookId);
+    sp.set("i", String(index));
+    router.replace(`/reader?${sp.toString()}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, index]); // (no pongas searchParams en deps)
+
   const {
     data: segments = [],
     refetch,
     isFetching,
   } = useSegments(bookId, index);
-  const ordered = useMemo(() => orderSegments(segments, dir), [segments, dir]); // ← ordenar aquí
+  const ordered = useMemo(
+    () => orderSegmentsLite(segments, dir),
+    [segments, dir]
+  );
   const imgUrl = useMemo(
     () => (bookId ? `/api/image/${bookId}/${index}` : ""),
     [bookId, index]
   );
 
   async function translateNow() {
-    await fetch("/api/translate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId, index }),
-    });
-    await refetch();
+    try {
+      setTranslating(true);
+      const res = await fetch("/api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bookId, index, lang: sourceLang }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        alert("Error al traducir: " + (j.detail || res.statusText));
+      }
+      await refetch();
+    } finally {
+      setTranslating(false);
+    }
   }
 
   const next = () => setIndex((i) => Math.min(i + 1, Math.max(pages - 1, 0)));
@@ -63,9 +102,10 @@ export default function ReaderPage() {
     return (
       <div className="p-6">
         Abre con <code>?bookId=...</code>. Sube un archivo en{" "}
-        <a className="underline" href="/upload">
+        <Link className="underline" href="/upload">
           /upload
-        </a>
+        </Link>
+        .
       </div>
     );
   }
@@ -75,29 +115,52 @@ export default function ReaderPage() {
       {/* Izquierda: texto */}
       <div className="p-3 overflow-auto border-r">
         <div className="flex items-center gap-2 mb-3">
+          <Link href="/" className="px-3 py-1 border rounded">
+            Inicio
+          </Link>
+          <Link href="/upload" className="px-3 py-1 border rounded">
+            Subir
+          </Link>
+
           <button onClick={prev} className="px-3 py-1 border rounded">
             ←
           </button>
           <div>
-            Página {pages ? index + 1 : 0} / {pages}
+            {" "}
+            Página {pages ? index + 1 : 0} / {pages}{" "}
           </div>
           <button onClick={next} className="px-3 py-1 border rounded">
             →
           </button>
 
           <div className="ml-auto flex items-center gap-2">
-            <label className="text-sm">Orden:</label>
+            <label className="text-sm">Lectura:</label>
             <select
               className="border rounded px-2 py-1"
               value={dir}
               onChange={(e) => setDir(e.target.value as "rtl" | "ltr")}
-              title="Orden de lectura (manga: RTL)"
             >
               <option value="rtl">Manga (derecha→izquierda)</option>
               <option value="ltr">Occidental (izquierda→derecha)</option>
             </select>
-            <button onClick={translateNow} className="px-3 py-1 border rounded">
-              Traducir esta página
+
+            <label className="text-sm">Origen:</label>
+            <select
+              className="border rounded px-2 py-1"
+              value={sourceLang}
+              onChange={(e) => setSourceLang(e.target.value as SourceLang)}
+            >
+              <option value="en">Inglés</option>
+              <option value="ja">Japonés</option>
+              <option value="auto">Auto (en/ja)</option>
+            </select>
+
+            <button
+              onClick={translateNow}
+              disabled={translating}
+              className="px-3 py-1 border rounded disabled:opacity-50"
+            >
+              {translating ? "Traduciendo…" : "Traducir esta página"}
             </button>
           </div>
         </div>
@@ -114,7 +177,7 @@ export default function ReaderPage() {
                   #{s.order} conf:{Math.round(s.confidence * 100)}%
                 </div>
                 <div className="text-sm">
-                  <b>JP:</b> {s.original}
+                  <b>ORIG:</b> {s.original}
                 </div>
                 <div className="text-sm">
                   <b>ES:</b> {s.translated}

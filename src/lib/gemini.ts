@@ -2,7 +2,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 const MODEL_EXTRACT =
   process.env.GEMINI_MODEL_EXTRACT ?? "gemini-2.0-flash-lite";
-const MODEL_TRANSL = process.env.GEMINI_MODEL_TRANSL ?? "gemini-2.0-flash"; // mejor calidad en traducción
+const MODEL_TRANSL = process.env.GEMINI_MODEL_TRANSL ?? "gemini-2.5-pro";
 
 function ensureKey(): string {
   const key = process.env.GEMINI_API_KEY;
@@ -22,7 +22,7 @@ function getModel(modelName: string, schema: any) {
   });
 }
 
-// A) Extrae solo segmentos (sin traducir)
+// -------- A) Extracción (sin traducir) --------
 export async function extractSegmentsFromImage(
   imgWebp: Buffer
 ): Promise<string> {
@@ -52,7 +52,7 @@ export async function extractSegmentsFromImage(
   const prompt = `
 Analiza esta página de manga. Devuelve SOLO JSON.
 - Detecta globos y recuadros de texto.
-- Ordena para lectura manga (derecha→izquierda y arriba→abajo).
+- Orden manga (derecha→izquierda y arriba→abajo).
 - Para cada ítem: { "order", "bbox": {"x","y","w","h"} (0..1), "original": "texto", "confidence": 0..1 }.
 - No traduzcas. No agregues explicaciones. Solo JSON.
 `;
@@ -67,9 +67,17 @@ Analiza esta página de manga. Devuelve SOLO JSON.
   return res.response.text();
 }
 
-// B) Traduce lista ordenada con coherencia de página
+// -------- B) Traducción contextual (con idioma origen) --------
+export type SourceLang = "en" | "ja" | "auto";
+
+/**
+ * Traduce la lista ordenada manteniendo coherencia entre líneas.
+ * @param items [{ order, original }]
+ * @param lang 'en' | 'ja' | 'auto'  (auto = detectar entre inglés/japonés)
+ */
 export async function translateSegmentsWithContext(
-  items: Array<{ order: number; original: string }>
+  items: Array<{ order: number; original: string }>,
+  lang: SourceLang = "auto"
 ): Promise<string> {
   const schema = {
     type: "array",
@@ -83,16 +91,26 @@ export async function translateSegmentsWithContext(
     },
   };
 
+  const langLabel =
+    lang === "en"
+      ? "inglés"
+      : lang === "ja"
+      ? "japonés"
+      : "auto (detecta entre inglés o japonés)";
+
   const prompt = `
-Traduce del ingles al español neutro teniendo en cuenta TODO el contexto de la página.
+Traduce del ${langLabel} al español neutro manteniendo coherencia de página completa.
 Reglas:
-- Mantén coherencia entre líneas (pronombres, tiempos, chistes).
-- Conserva nombres propios y honoríficos si agregan matiz (san, chan, senpai), en minúscula.
-- Evita traducciones literales raras; prioriza naturalidad breve.
-- NO cambies el orden. Devuelve SOLO JSON: [{ "order": n, "translated": "..." }].
-Aquí está la lista (orden manga):
+- Mantén coherencia (pronombres, tiempos, tono y chistes) entre líneas consecutivas.
+- Respeta nombres propios. Honoríficos (san, chan, senpai) solo si aportan matiz; en minúscula.
+- Evita literalidad rígida; prioriza naturalidad breve y clara.
+- Preserva signos y entonación necesarios (¿? ¡! …).
+- NO reordenes líneas. Devuelve SOLO JSON: [{ "order": n, "translated": "..." }].
+
+Lista ordenada (manga RTL):
 ${items.map((it) => `#${it.order}: ${it.original}`).join("\n")}
 `;
+
   const model = getModel(MODEL_TRANSL, schema);
   const res = await model.generateContent([{ text: prompt }]);
   return res.response.text();
